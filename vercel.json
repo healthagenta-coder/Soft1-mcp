@@ -1,5 +1,5 @@
 {
   "rewrites": [
-    { "source": "/(.*)", "destination": "soft1_mcp_server_real.py" }
+    { "source": "/(.*)", "destination": "index.py" }
   ]
 }
