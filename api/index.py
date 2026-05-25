@@ -356,9 +356,7 @@ async def soft1_fetch_report_page(
 # ============================================================================
 # Run the MCP Server
 # ============================================================================
-app = mcp.get_asgi_app()
+app = mcp.http_app(stateless_http=True)
 
 if __name__ == "__main__":
-    # FastMCP automatically handles stdio protocol
     mcp.run()
-    
