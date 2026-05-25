@@ -1,2 +1,2 @@
 [tool.vercel]
-entrypoint = "soft1_mcp_server_real:app"
+entrypoint = "api/index:app"
