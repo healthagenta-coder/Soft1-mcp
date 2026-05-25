@@ -360,3 +360,5 @@ async def soft1_fetch_report_page(
 if __name__ == "__main__":
     # FastMCP automatically handles stdio protocol
     mcp.run()
+
+app = mcp.get_asgi_app()
