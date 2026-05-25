@@ -1,2 +1,11 @@
+[project]
+name = "soft1-mcp"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp",
+    "httpx",
+]
+
 [tool.vercel]
 entrypoint = "api/index:app"
