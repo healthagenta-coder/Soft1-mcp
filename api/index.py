@@ -356,7 +356,7 @@ async def soft1_fetch_report_page(
 # ============================================================================
 # Run the MCP Server
 # ============================================================================
-app = mcp.http_app(stateless_http=True)
+app = mcp.http_app(stateless_http=True, path="/")
 
 if __name__ == "__main__":
     mcp.run()
