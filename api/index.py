@@ -356,7 +356,20 @@ async def soft1_fetch_report_page(
 # ============================================================================
 # Run the MCP Server
 # ============================================================================
+# ============================================================================
+# Run the MCP Server
+# ============================================================================
+from starlette.middleware.cors import CORSMiddleware
+
 app = mcp.http_app(stateless_http=True, path="/")
+
+# Add CORS middleware so browser artifacts can call this directly
+app = CORSMiddleware(
+    app,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
 
 if __name__ == "__main__":
     mcp.run()
