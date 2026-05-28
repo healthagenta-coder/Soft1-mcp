@@ -1,39 +1,35 @@
 """
-Soft1 ERP MCP Server - REAL MCP Implementation
-Uses FastMCP for proper MCP protocol support
+Soft1 ERP MCP Server + REST Proxy
+- MCP tools: used by Claude
+- REST proxy (/S1Services): used by browser artifacts directly
 """
 
-import httpx
 import json
-from fastmcp import FastMCP
+import urllib.request
+from http.server import BaseHTTPRequestHandler
 from typing import Optional
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse
-from starlette.routing import Route, Mount
-from starlette.middleware.cors import CORSMiddleware
+
+import httpx
+from fastmcp import FastMCP
+
+SOFT1_URL = "https://pm.oncloud.gr/s1services/"
 
 # ============================================================================
-# Initialize MCP Server (FastMCP handles the protocol)
+# Initialize MCP Server
 # ============================================================================
 
 mcp = FastMCP("Soft1 ERP Server")
 
 
 # ============================================================================
-# Soft1 API Client
+# Soft1 API Client (used by MCP tools)
 # ============================================================================
 
 class Soft1Client:
-    """Client for Soft1 ERP API"""
-
-    BASE_URL = "https://pm.oncloud.gr/s1services/"
-
     def __init__(self):
         self.client_id: Optional[str] = None
 
     async def login(self, username: str, password: str) -> dict:
-        """Login to Soft1"""
         async with httpx.AsyncClient(timeout=30) as client:
             payload = {
                 "service": "login",
@@ -45,12 +41,11 @@ class Soft1Client:
                 "MODULE": "0",
                 "REFID": "1"
             }
-            response = await client.post(self.BASE_URL, json=payload)
+            response = await client.post(SOFT1_URL, json=payload)
             try:
                 data = response.json()
             except UnicodeDecodeError:
-                text = response.content.decode('latin-1')
-                data = json.loads(text)
+                data = json.loads(response.content.decode('latin-1'))
             if data.get("success"):
                 self.client_id = data.get("clientID")
             return data
@@ -67,12 +62,11 @@ class Soft1Client:
                 "LIMIT": limit,
                 "FILTERS": filters
             }
-            response = await client.post(self.BASE_URL, json=payload)
+            response = await client.post(SOFT1_URL, json=payload)
             try:
                 return response.json()
             except UnicodeDecodeError:
-                text = response.content.decode('latin-1')
-                return json.loads(text)
+                return json.loads(response.content.decode('latin-1'))
 
     async def get_data(self, client_id, obj, key, locate_info=""):
         async with httpx.AsyncClient(timeout=30) as client:
@@ -85,12 +79,11 @@ class Soft1Client:
                 "KEY": key,
                 "LOCATEINFO": locate_info
             }
-            response = await client.post(self.BASE_URL, json=payload)
+            response = await client.post(SOFT1_URL, json=payload)
             try:
                 return response.json()
             except UnicodeDecodeError:
-                text = response.content.decode('latin-1')
-                return json.loads(text)
+                return json.loads(response.content.decode('latin-1'))
 
     async def get_report_info(self, client_id, obj, filters=""):
         async with httpx.AsyncClient(timeout=30) as client:
@@ -102,12 +95,11 @@ class Soft1Client:
                 "LIST": "",
                 "FILTERS": filters
             }
-            response = await client.post(self.BASE_URL, json=payload)
+            response = await client.post(SOFT1_URL, json=payload)
             try:
                 return response.json()
             except UnicodeDecodeError:
-                text = response.content.decode('latin-1')
-                return json.loads(text)
+                return json.loads(response.content.decode('latin-1'))
 
     async def get_report_data(self, client_id, req_id, page_num):
         async with httpx.AsyncClient(timeout=30) as client:
@@ -118,19 +110,18 @@ class Soft1Client:
                 "reqID": req_id,
                 "PAGENUM": page_num
             }
-            response = await client.post(self.BASE_URL, json=payload)
+            response = await client.post(SOFT1_URL, json=payload)
             try:
                 return response.json()
             except UnicodeDecodeError:
-                text = response.content.decode('latin-1')
-                return json.loads(text)
+                return json.loads(response.content.decode('latin-1'))
 
 
 soft1 = Soft1Client()
 
 
 # ============================================================================
-# MCP Tools
+# MCP Tools (used by Claude)
 # ============================================================================
 
 @mcp.tool()
@@ -247,49 +238,73 @@ async def soft1_fetch_report_page(client_id: str, req_id: str, page_num: int) ->
 
 
 # ============================================================================
-# REST Proxy — /S1Services forwards directly to real Soft1 API
+# REST Proxy Handler (used by browser artifacts)
+# Vercel calls this class for HTTP requests
 # ============================================================================
 
-async def s1services(request: Request):
-    try:
-        body = await request.json()
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                "https://pm.oncloud.gr/s1services/",
-                json=body
+def _cors_headers(req_handler):
+    req_handler.send_header("Access-Control-Allow-Origin", "*")
+    req_handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+    req_handler.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+
+class handler(BaseHTTPRequestHandler):
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        _cors_headers(self)
+        self.end_headers()
+
+    def do_GET(self):
+        body = b'{"status": "Soft1 proxy running OK"}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        _cors_headers(self)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+        try:
+            payload = json.loads(body)
+            req = urllib.request.Request(
+                SOFT1_URL,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST"
             )
-            try:
-                data = response.json()
-            except Exception:
-                text = response.content.decode('latin-1')
-                data = json.loads(text)
-        return JSONResponse(data)
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read()
+                try:
+                    result = json.loads(raw.decode("utf-8"))
+                except Exception:
+                    result = json.loads(raw.decode("latin-1"))
 
+            response_body = json.dumps(result).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            _cors_headers(self)
+            self.send_header("Content-Length", str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
 
-async def s1services_options(request: Request):
-    return JSONResponse({}, status_code=200)
+        except Exception as e:
+            error = json.dumps({"error": str(e)}).encode("utf-8")
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            _cors_headers(self)
+            self.send_header("Content-Length", str(len(error)))
+            self.end_headers()
+            self.wfile.write(error)
+
+    def log_message(self, format, *args):
+        pass  # Suppress Vercel logs noise
 
 
 # ============================================================================
-# Combined App: REST + MCP
+# MCP entrypoint (when run directly, not via Vercel)
 # ============================================================================
-
-mcp_app = mcp.http_app(stateless_http=True, path="/mcp")
-
-combined = Starlette(routes=[
-    Route("/S1Services", s1services, methods=["POST"]),
-    Route("/S1Services", s1services_options, methods=["OPTIONS"]),
-    Mount("/", app=mcp_app),
-])
-
-app = CORSMiddleware(
-    combined,
-    allow_origins=["*"],
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-)
-
 if __name__ == "__main__":
     mcp.run()
