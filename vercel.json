@@ -1,18 +1,5 @@
 {
   "rewrites": [
-    { "source": "/S1Services", "destination": "/api/index.py" },
-    { "source": "/S1Services/(.*)", "destination": "/api/index.py" },
-    { "source": "/mcp", "destination": "/api/index.py" },
-    { "source": "/mcp/(.*)", "destination": "/api/index.py" }
-  ],
-  "headers": [
-    {
-      "source": "/(.*)",
-      "headers": [
-        { "key": "Access-Control-Allow-Origin", "value": "*" },
-        { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
-        { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization" }
-      ]
-    }
+    { "source": "/(.*)", "destination": "/api/index.py" }
   ]
 }
