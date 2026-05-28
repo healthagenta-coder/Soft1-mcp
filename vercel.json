@@ -1,6 +1,9 @@
 {
   "rewrites": [
-    { "source": "/(.*)", "destination": "/api/index.py" }
+    { "source": "/S1Services", "destination": "/api/index.py" },
+    { "source": "/S1Services/(.*)", "destination": "/api/index.py" },
+    { "source": "/mcp", "destination": "/api/index.py" },
+    { "source": "/mcp/(.*)", "destination": "/api/index.py" }
   ],
   "headers": [
     {
