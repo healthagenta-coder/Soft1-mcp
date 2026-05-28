@@ -1,7 +1,7 @@
 """
 Soft1 ERP MCP Server + REST Proxy
 - MCP tools: used by Claude
-- REST proxy (/S1Services): used by browser artifacts directly
+- REST proxy: used by browser artifacts directly
 """
 
 import json
@@ -238,28 +238,27 @@ async def soft1_fetch_report_page(client_id: str, req_id: str, page_num: int) ->
 
 
 # ============================================================================
-# REST Proxy Handler (used by browser artifacts)
-# Vercel calls this class for HTTP requests
+# Vercel HTTP Handler — REST proxy for browser artifacts
+# Vercel detects this class automatically and uses it for all HTTP requests
 # ============================================================================
-
-def _cors_headers(req_handler):
-    req_handler.send_header("Access-Control-Allow-Origin", "*")
-    req_handler.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    req_handler.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
 
 class handler(BaseHTTPRequestHandler):
 
+    def _send_cors_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
     def do_OPTIONS(self):
         self.send_response(200)
-        _cors_headers(self)
+        self._send_cors_headers()
         self.end_headers()
 
     def do_GET(self):
         body = b'{"status": "Soft1 proxy running OK"}'
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        _cors_headers(self)
+        self._send_cors_headers()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -285,7 +284,7 @@ class handler(BaseHTTPRequestHandler):
             response_body = json.dumps(result).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            _cors_headers(self)
+            self._send_cors_headers()
             self.send_header("Content-Length", str(len(response_body)))
             self.end_headers()
             self.wfile.write(response_body)
@@ -294,17 +293,18 @@ class handler(BaseHTTPRequestHandler):
             error = json.dumps({"error": str(e)}).encode("utf-8")
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
-            _cors_headers(self)
+            self._send_cors_headers()
             self.send_header("Content-Length", str(len(error)))
             self.end_headers()
             self.wfile.write(error)
 
     def log_message(self, format, *args):
-        pass  # Suppress Vercel logs noise
+        pass  # Suppress logs
 
 
 # ============================================================================
 # MCP entrypoint (when run directly, not via Vercel)
 # ============================================================================
+
 if __name__ == "__main__":
     mcp.run()
