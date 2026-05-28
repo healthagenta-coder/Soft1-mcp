@@ -7,6 +7,11 @@ import httpx
 import json
 from fastmcp import FastMCP
 from typing import Optional
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Route, Mount
+from starlette.middleware.cors import CORSMiddleware
 
 # ============================================================================
 # Initialize MCP Server (FastMCP handles the protocol)
@@ -41,28 +46,16 @@ class Soft1Client:
                 "REFID": "1"
             }
             response = await client.post(self.BASE_URL, json=payload)
-
-            # Handle different encodings (Soft1 may return Latin-1 instead of UTF-8)
             try:
                 data = response.json()
             except UnicodeDecodeError:
-                # Try Latin-1 encoding
                 text = response.content.decode('latin-1')
                 data = json.loads(text)
-
             if data.get("success"):
                 self.client_id = data.get("clientID")
             return data
 
-    async def get_browser_info(
-        self,
-        client_id: str,
-        obj: str,
-        list_name: str,
-        filters: str = "",
-        limit: int = 20
-    ) -> dict:
-        """Get list of records"""
+    async def get_browser_info(self, client_id, obj, list_name, filters="", limit=20):
         async with httpx.AsyncClient(timeout=30) as client:
             payload = {
                 "service": "getBrowserInfo",
@@ -75,21 +68,13 @@ class Soft1Client:
                 "FILTERS": filters
             }
             response = await client.post(self.BASE_URL, json=payload)
-
             try:
                 return response.json()
             except UnicodeDecodeError:
                 text = response.content.decode('latin-1')
                 return json.loads(text)
 
-    async def get_data(
-        self,
-        client_id: str,
-        obj: str,
-        key: int,
-        locate_info: str = ""
-    ) -> dict:
-        """Get detailed record"""
+    async def get_data(self, client_id, obj, key, locate_info=""):
         async with httpx.AsyncClient(timeout=30) as client:
             payload = {
                 "service": "getData",
@@ -101,20 +86,13 @@ class Soft1Client:
                 "LOCATEINFO": locate_info
             }
             response = await client.post(self.BASE_URL, json=payload)
-
             try:
                 return response.json()
             except UnicodeDecodeError:
                 text = response.content.decode('latin-1')
                 return json.loads(text)
 
-    async def get_report_info(
-        self,
-        client_id: str,
-        obj: str,
-        filters: str = ""
-    ) -> dict:
-        """Generate report"""
+    async def get_report_info(self, client_id, obj, filters=""):
         async with httpx.AsyncClient(timeout=30) as client:
             payload = {
                 "service": "getReportInfo",
@@ -125,20 +103,13 @@ class Soft1Client:
                 "FILTERS": filters
             }
             response = await client.post(self.BASE_URL, json=payload)
-
             try:
                 return response.json()
             except UnicodeDecodeError:
                 text = response.content.decode('latin-1')
                 return json.loads(text)
 
-    async def get_report_data(
-        self,
-        client_id: str,
-        req_id: str,
-        page_num: int
-    ) -> dict:
-        """Fetch report page"""
+    async def get_report_data(self, client_id, req_id, page_num):
         async with httpx.AsyncClient(timeout=30) as client:
             payload = {
                 "service": "getReportData",
@@ -148,7 +119,6 @@ class Soft1Client:
                 "PAGENUM": page_num
             }
             response = await client.post(self.BASE_URL, json=payload)
-
             try:
                 return response.json()
             except UnicodeDecodeError:
@@ -160,32 +130,18 @@ soft1 = Soft1Client()
 
 
 # ============================================================================
-# MCP Tools (FastMCP handles protocol automatically)
+# MCP Tools
 # ============================================================================
 
 @mcp.tool()
 async def soft1_login(username: str, password: str) -> dict:
     """Login to Soft1 ERP and get session token"""
-    result = await soft1.login(username, password)
-    return result
+    return await soft1.login(username, password)
 
 
 @mcp.tool()
-async def soft1_search_customers(
-    client_id: str,
-    filter_type: str,
-    filter_value: str,
-    limit: int = 20
-) -> dict:
-    """
-    Search for customers by name, code, VAT, city, or phone
-
-    Args:
-        client_id: Session clientID from login
-        filter_type: 'name', 'code', 'vat', 'city', or 'phone'
-        filter_value: Value to search (supports * for partial)
-        limit: Max results (default 20)
-    """
+async def soft1_search_customers(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
+    """Search for customers by name, code, VAT, city, or phone"""
     filter_map = {
         "name": "CUSTOMER.NAME={0}*",
         "code": "CUSTOMER.CODE={0}*",
@@ -194,32 +150,18 @@ async def soft1_search_customers(
         "phone": "CUSTOMER.PHONE01={0}*"
     }
     filter_str = filter_map[filter_type].format(filter_value)
-    result = await soft1.get_browser_info(
-        client_id, "CUSTOMER", "Customers", filter_str, limit
-    )
-    return result
+    return await soft1.get_browser_info(client_id, "CUSTOMER", "Customers", filter_str, limit)
 
 
 @mcp.tool()
-async def soft1_get_customer_profile(
-    client_id: str,
-    customer_key: int
-) -> dict:
+async def soft1_get_customer_profile(client_id: str, customer_key: int) -> dict:
     """Get complete customer profile with all details"""
     locate_info = "CUSTOMER:CODE,NAME,AFM,ADDRESS,CITY,ZIP,PHONE01,PHONE02,FAX,EMAIL,WEBPAGE,DISCOUNT,REMARKS"
-    result = await soft1.get_data(
-        client_id, "CUSTOMER", customer_key, locate_info
-    )
-    return result
+    return await soft1.get_data(client_id, "CUSTOMER", customer_key, locate_info)
 
 
 @mcp.tool()
-async def soft1_customer_balance(
-    client_id: str,
-    filter_type: str,
-    filter_value: str,
-    limit: int = 20
-) -> dict:
+async def soft1_customer_balance(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
     """Get customer balance and turnover information"""
     filter_map = {
         "name": "CUSTOMER.NAME={0}*",
@@ -227,20 +169,11 @@ async def soft1_customer_balance(
         "vat": "CUSTOMER.AFM={0}"
     }
     filter_str = filter_map[filter_type].format(filter_value)
-    result = await soft1.get_browser_info(
-        client_id, "CUSTOMER", "Customer Balance - Turnover",
-        filter_str, limit
-    )
-    return result
+    return await soft1.get_browser_info(client_id, "CUSTOMER", "Customer Balance - Turnover", filter_str, limit)
 
 
 @mcp.tool()
-async def soft1_search_items(
-    client_id: str,
-    filter_type: str,
-    filter_value: str,
-    limit: int = 20
-) -> dict:
+async def soft1_search_items(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
     """Search for items/products by name, code, or category"""
     filter_map = {
         "name": "ITEM.NAME={0}*",
@@ -248,19 +181,11 @@ async def soft1_search_items(
         "category": "ITEM.CATEGORY={0}*"
     }
     filter_str = filter_map[filter_type].format(filter_value)
-    result = await soft1.get_browser_info(
-        client_id, "ITEM", "Items", filter_str, limit
-    )
-    return result
+    return await soft1.get_browser_info(client_id, "ITEM", "Items", filter_str, limit)
 
 
 @mcp.tool()
-async def soft1_item_stock_balance(
-    client_id: str,
-    filter_type: str,
-    filter_value: str,
-    limit: int = 20
-) -> dict:
+async def soft1_item_stock_balance(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
     """Check stock levels and availability"""
     filter_map = {
         "name": "ITEM.NAME={0}*",
@@ -268,19 +193,11 @@ async def soft1_item_stock_balance(
         "category": "ITEM.CATEGORY={0}*"
     }
     filter_str = filter_map[filter_type].format(filter_value)
-    result = await soft1.get_browser_info(
-        client_id, "ITEM", "Item balance", filter_str, limit
-    )
-    return result
+    return await soft1.get_browser_info(client_id, "ITEM", "Item balance", filter_str, limit)
 
 
 @mcp.tool()
-async def soft1_search_sales_documents(
-    client_id: str,
-    filter_type: str,
-    filter_value: str,
-    limit: int = 20
-) -> dict:
+async def soft1_search_sales_documents(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
     """Search sales documents (invoices, orders, offers, credit notes)"""
     filter_map = {
         "customer_name": "SALDOC.TRDRNAME={0}*",
@@ -289,18 +206,11 @@ async def soft1_search_sales_documents(
         "type": "SALDOC.SERIES={0}*"
     }
     filter_str = filter_map[filter_type].format(filter_value)
-    result = await soft1.get_browser_info(
-        client_id, "SALDOC", "Sales List", filter_str, limit
-    )
-    return result
+    return await soft1.get_browser_info(client_id, "SALDOC", "Sales List", filter_str, limit)
 
 
 @mcp.tool()
-async def soft1_outstanding_orders(
-    client_id: str,
-    filter_type: str = "all",
-    filter_value: str = ""
-) -> dict:
+async def soft1_outstanding_orders(client_id: str, filter_type: str = "all", filter_value: str = "") -> dict:
     """Get outstanding/uninvoiced sales orders"""
     filter_str = ""
     if filter_type != "all":
@@ -309,23 +219,12 @@ async def soft1_outstanding_orders(
             "customer_code": "SALDOC.CCCCODE={0}*"
         }
         filter_str = filter_map[filter_type].format(filter_value)
-    result = await soft1.get_browser_info(
-        client_id, "SALDOC", "Outstanding documents - Sales", filter_str
-    )
-    return result
+    return await soft1.get_browser_info(client_id, "SALDOC", "Outstanding documents - Sales", filter_str)
 
 
 @mcp.tool()
-async def soft1_generate_report(
-    client_id: str,
-    report_type: str,
-    filter_type: str = "all",
-    filter_value: str = ""
-) -> dict:
-    """
-    Generate a report (aged_balance or customer_address_book)
-    Returns reqID and number of pages
-    """
+async def soft1_generate_report(client_id: str, report_type: str, filter_type: str = "all", filter_value: str = "") -> dict:
+    """Generate a report (aged_balance or customer_address_book)"""
     report_map = {
         "aged_balance": "Cust_OPITEM",
         "customer_address_book": "CUST_ADDR_BOOK"
@@ -338,34 +237,55 @@ async def soft1_generate_report(
             "customer_vat": "CUSTOMER.AFM={0}"
         }
         filter_str = filter_map[filter_type].format(filter_value)
-    result = await soft1.get_report_info(client_id, report_obj, filter_str)
-    return result
+    return await soft1.get_report_info(client_id, report_obj, filter_str)
 
 
 @mcp.tool()
-async def soft1_fetch_report_page(
-    client_id: str,
-    req_id: str,
-    page_num: int
-) -> dict:
+async def soft1_fetch_report_page(client_id: str, req_id: str, page_num: int) -> dict:
     """Fetch a specific page of a generated report (returns HTML)"""
-    result = await soft1.get_report_data(client_id, req_id, page_num)
-    return result
+    return await soft1.get_report_data(client_id, req_id, page_num)
 
 
 # ============================================================================
-# Run the MCP Server
+# REST Proxy — /S1Services forwards directly to real Soft1 API
 # ============================================================================
-# ============================================================================
-# Run the MCP Server
-# ============================================================================
-from starlette.middleware.cors import CORSMiddleware
 
-app = mcp.http_app(stateless_http=True, path="/")
+async def s1services(request: Request):
+    try:
+        body = await request.json()
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                "https://pm.oncloud.gr/s1services/",
+                json=body
+            )
+            try:
+                data = response.json()
+            except Exception:
+                text = response.content.decode('latin-1')
+                data = json.loads(text)
+        return JSONResponse(data)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
-# Add CORS middleware so browser artifacts can call this directly
+
+async def s1services_options(request: Request):
+    return JSONResponse({}, status_code=200)
+
+
+# ============================================================================
+# Combined App: REST + MCP
+# ============================================================================
+
+mcp_app = mcp.http_app(stateless_http=True, path="/mcp")
+
+combined = Starlette(routes=[
+    Route("/S1Services", s1services, methods=["POST"]),
+    Route("/S1Services", s1services_options, methods=["OPTIONS"]),
+    Mount("/", app=mcp_app),
+])
+
 app = CORSMiddleware(
-    app,
+    combined,
     allow_origins=["*"],
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
