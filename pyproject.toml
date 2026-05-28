@@ -8,4 +8,4 @@ dependencies = [
 ]
 
 [tool.vercel]
-entrypoint = "api/S1Services:app"
+entrypoint = "api/index:app"
