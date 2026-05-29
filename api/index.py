@@ -239,7 +239,7 @@ async def soft1_fetch_report_page(client_id: str, req_id: str, page_num: int) ->
 
 # ============================================================================
 # Vercel HTTP Handler — REST proxy for browser artifacts
-# Vercel detects this class automatically and uses it for all HTTP requests
+# Vercel detects this class automatically and uses it for all HTTP requestss
 # ============================================================================
 
 class handler(BaseHTTPRequestHandler):
