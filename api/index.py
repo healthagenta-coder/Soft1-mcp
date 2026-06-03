@@ -7,10 +7,13 @@ Soft1 ERP MCP Server + REST Proxy
 import json
 import urllib.request
 import urllib.error
+import gzip
+import zlib
 from http.server import BaseHTTPRequestHandler
 from typing import Optional
 import asyncio
 import traceback
+import io
 
 import httpx
 from fastmcp import FastMCP
@@ -120,6 +123,70 @@ class Soft1Client:
 
 
 soft1 = Soft1Client()
+
+
+def decompress_response(data: bytes) -> str:
+    """Decompress gzip or deflate compressed response"""
+    try:
+        # Try gzip decompression first
+        if len(data) >= 2 and data[0] == 0x1f and data[1] == 0x8b:
+            # Gzip magic bytes
+            with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz:
+                decompressed = gz.read()
+                return decompressed.decode('utf-8', errors='replace')
+        else:
+            # Try zlib/deflate
+            try:
+                decompressed = zlib.decompress(data, -zlib.MAX_WBITS)
+                return decompressed.decode('utf-8', errors='replace')
+            except:
+                # Try with wbits 15 (default)
+                try:
+                    decompressed = zlib.decompress(data)
+                    return decompressed.decode('utf-8', errors='replace')
+                except:
+                    # Not compressed, return as is
+                    return data.decode('utf-8', errors='replace')
+    except Exception as e:
+        print(f"Decompression error: {e}")
+        # Return original as string if decompression fails
+        return data.decode('utf-8', errors='replace')
+
+
+def parse_soft1_response(raw_data: bytes, content_type: str) -> dict:
+    """Parse Soft1 response handling compression and encoding"""
+    
+    # First, decompress if needed
+    decompressed_str = decompress_response(raw_data)
+    print(f"Decompressed response preview: {decompressed_str[:200]}")
+    
+    # Try to parse as JSON
+    try:
+        # Check if it's already JSON
+        return json.loads(decompressed_str)
+    except json.JSONDecodeError:
+        pass
+    
+    # Try with latin-1/greek encoding (windows-1253)
+    try:
+        # Sometimes the raw compressed data needs special handling
+        # Try to decompress with different approach for windows-1253
+        if len(raw_data) >= 2 and raw_data[0] == 0x1f and raw_data[1] == 0x8b:
+            # Re-decompress with gzip and decode as windows-1253
+            with gzip.GzipFile(fileobj=io.BytesIO(raw_data)) as gz:
+                decompressed = gz.read()
+                decoded = decompressed.decode('windows-1253')
+                return json.loads(decoded)
+    except:
+        pass
+    
+    # If all JSON parsing fails, return as text with metadata
+    return {
+        "success": True,
+        "raw_response": decompressed_str[:1000],
+        "content_type": content_type,
+        "note": "Response received but not valid JSON. This might be HTML or other format."
+    }
 
 
 # ============================================================================
@@ -275,95 +342,56 @@ class handler(BaseHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             post_data = self.rfile.read(content_length)
             
-            # Log for debugging (Vercel will capture this)
-            print(f"Received POST data length: {content_length}")
-            print(f"Raw data preview: {post_data[:200]}")
-            
             if not post_data:
                 raise ValueError("Empty request body")
             
             payload = json.loads(post_data.decode('utf-8'))
-            print(f"Parsed payload service: {payload.get('service', 'unknown')}")
+            print(f"Service called: {payload.get('service', 'unknown')}")
             
-            # Forward to Soft1 API with better error handling
+            # Forward to Soft1 API
             req_data = json.dumps(payload).encode('utf-8')
             req = urllib.request.Request(
                 SOFT1_URL,
                 data=req_data,
                 headers={
                     "Content-Type": "application/json",
-                    "Accept": "application/json, text/plain, */*"
+                    "Accept": "application/json, text/plain, */*",
+                    "Accept-Encoding": "gzip, deflate"  # Tell Soft1 we accept compressed responses
                 },
                 method="POST"
             )
             
-            print(f"Sending request to Soft1: {SOFT1_URL}")
-            
-            try:
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    raw = resp.read()
-                    print(f"Soft1 response status: {resp.status}")
-                    print(f"Soft1 response length: {len(raw)}")
-                    
-                    if not raw:
-                        raise ValueError("Empty response from Soft1 API")
-                    
-                    # Try to decode response
-                    raw_str = raw.decode('utf-8', errors='replace')
-                    print(f"Response preview: {raw_str[:200]}")
-                    
-                    # Try to parse JSON
-                    try:
-                        result = json.loads(raw_str)
-                    except json.JSONDecodeError as je:
-                        # Try Latin-1
-                        try:
-                            result = json.loads(raw.decode('latin-1'))
-                        except:
-                            # If still fails, return as text
-                            result = {
-                                "success": False,
-                                "error": "Non-JSON response from Soft1",
-                                "raw_response": raw_str[:500],
-                                "content_type": resp.headers.get('Content-Type', 'unknown')
-                            }
-                    
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self._send_cors_headers()
-                    self.end_headers()
-                    self.wfile.write(json.dumps(result).encode('utf-8'))
-                    
-            except urllib.error.HTTPError as e:
-                error_body = e.read()
-                print(f"HTTP Error {e.code}: {error_body[:200]}")
-                self.send_response(502)
-                self.send_header("Content-Type", "application/json")
-                self._send_cors_headers()
-                self.end_headers()
-                error_response = json.dumps({
-                    "error": f"Soft1 API returned HTTP {e.code}",
-                    "details": error_body.decode('utf-8', errors='replace')[:500]
-                })
-                self.wfile.write(error_response.encode('utf-8'))
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw_data = resp.read()
+                content_type = resp.headers.get('Content-Type', '')
+                content_encoding = resp.headers.get('Content-Encoding', '')
                 
-            except urllib.error.URLError as e:
-                print(f"URL Error: {e.reason}")
-                self.send_response(502)
+                print(f"Response Content-Type: {content_type}")
+                print(f"Response Content-Encoding: {content_encoding}")
+                print(f"Response size: {len(raw_data)} bytes")
+                
+                # Parse the response with compression handling
+                result = parse_soft1_response(raw_data, content_type)
+                
+                # If result contains raw_response and no valid JSON, try one more time
+                if "raw_response" in result and "success" in result:
+                    # Check if the raw_response looks like JSON
+                    try:
+                        maybe_json = json.loads(result["raw_response"])
+                        result = maybe_json
+                    except:
+                        pass
+                
+                self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self._send_cors_headers()
                 self.end_headers()
-                error_response = json.dumps({
-                    "error": f"Failed to connect to Soft1 API",
-                    "details": str(e.reason)
-                })
-                self.wfile.write(error_response.encode('utf-8'))
+                self.wfile.write(json.dumps(result).encode('utf-8'))
             
         except json.JSONDecodeError as e:
             error_response = json.dumps({
                 "error": "Invalid JSON in request body",
-                "details": str(e),
-                "received": post_data.decode('utf-8', errors='replace')[:200]
+                "details": str(e)
             })
             self.send_response(400)
             self.send_header("Content-Type", "application/json")
@@ -372,7 +400,7 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(error_response.encode('utf-8'))
             
         except Exception as e:
-            print(f"Unexpected error: {traceback.format_exc()}")
+            print(f"Error: {traceback.format_exc()}")
             error_response = json.dumps({
                 "error": str(e),
                 "type": type(e).__name__,
