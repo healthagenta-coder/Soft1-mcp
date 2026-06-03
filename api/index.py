@@ -6,12 +6,12 @@ Soft1 ERP MCP Server + REST Proxy
 
 import json
 import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler
 from typing import Optional
 import asyncio
+import traceback
 
-# Note: httpx and fastmcp are for MCP functionality
-# For the Vercel handler, we'll use urllib for simplicity
 import httpx
 from fastmcp import FastMCP
 
@@ -120,24 +120,6 @@ class Soft1Client:
 
 
 soft1 = Soft1Client()
-
-# Helper to run async functions synchronously
-def run_async(coro):
-    """Run async coroutine in synchronous context"""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-    
-    if loop and loop.is_running():
-        # Already in async context, create task
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(asyncio.run, coro)
-            return future.result()
-    else:
-        # No running loop, run normally
-        return asyncio.run(coro)
 
 
 # ============================================================================
@@ -259,7 +241,6 @@ async def soft1_fetch_report_page(client_id: str, req_id: str, page_num: int) ->
 
 # ============================================================================
 # Vercel HTTP Handler — REST proxy for browser artifacts
-# Vercel requires a class named 'handler' that extends BaseHTTPRequestHandler
 # ============================================================================
 
 class handler(BaseHTTPRequestHandler):
@@ -284,7 +265,8 @@ class handler(BaseHTTPRequestHandler):
         response = json.dumps({
             "status": "Soft1 MCP Proxy is running",
             "method": "GET",
-            "endpoints": ["POST / - Proxy Soft1 API calls"]
+            "endpoints": ["POST / - Proxy Soft1 API calls"],
+            "soft1_url": SOFT1_URL
         })
         self.wfile.write(response.encode('utf-8'))
     
@@ -292,33 +274,109 @@ class handler(BaseHTTPRequestHandler):
         try:
             content_length = int(self.headers.get('Content-Length', 0))
             post_data = self.rfile.read(content_length)
-            payload = json.loads(post_data.decode('utf-8'))
             
-            # Forward to Soft1 API
+            # Log for debugging (Vercel will capture this)
+            print(f"Received POST data length: {content_length}")
+            print(f"Raw data preview: {post_data[:200]}")
+            
+            if not post_data:
+                raise ValueError("Empty request body")
+            
+            payload = json.loads(post_data.decode('utf-8'))
+            print(f"Parsed payload service: {payload.get('service', 'unknown')}")
+            
+            # Forward to Soft1 API with better error handling
+            req_data = json.dumps(payload).encode('utf-8')
             req = urllib.request.Request(
                 SOFT1_URL,
-                data=json.dumps(payload).encode('utf-8'),
-                headers={"Content-Type": "application/json"},
+                data=req_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/plain, */*"
+                },
                 method="POST"
             )
             
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                raw = resp.read()
-                try:
-                    result = json.loads(raw.decode('utf-8'))
-                except:
-                    result = json.loads(raw.decode('latin-1'))
+            print(f"Sending request to Soft1: {SOFT1_URL}")
             
-            self.send_response(200)
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    raw = resp.read()
+                    print(f"Soft1 response status: {resp.status}")
+                    print(f"Soft1 response length: {len(raw)}")
+                    
+                    if not raw:
+                        raise ValueError("Empty response from Soft1 API")
+                    
+                    # Try to decode response
+                    raw_str = raw.decode('utf-8', errors='replace')
+                    print(f"Response preview: {raw_str[:200]}")
+                    
+                    # Try to parse JSON
+                    try:
+                        result = json.loads(raw_str)
+                    except json.JSONDecodeError as je:
+                        # Try Latin-1
+                        try:
+                            result = json.loads(raw.decode('latin-1'))
+                        except:
+                            # If still fails, return as text
+                            result = {
+                                "success": False,
+                                "error": "Non-JSON response from Soft1",
+                                "raw_response": raw_str[:500],
+                                "content_type": resp.headers.get('Content-Type', 'unknown')
+                            }
+                    
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self._send_cors_headers()
+                    self.end_headers()
+                    self.wfile.write(json.dumps(result).encode('utf-8'))
+                    
+            except urllib.error.HTTPError as e:
+                error_body = e.read()
+                print(f"HTTP Error {e.code}: {error_body[:200]}")
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json")
+                self._send_cors_headers()
+                self.end_headers()
+                error_response = json.dumps({
+                    "error": f"Soft1 API returned HTTP {e.code}",
+                    "details": error_body.decode('utf-8', errors='replace')[:500]
+                })
+                self.wfile.write(error_response.encode('utf-8'))
+                
+            except urllib.error.URLError as e:
+                print(f"URL Error: {e.reason}")
+                self.send_response(502)
+                self.send_header("Content-Type", "application/json")
+                self._send_cors_headers()
+                self.end_headers()
+                error_response = json.dumps({
+                    "error": f"Failed to connect to Soft1 API",
+                    "details": str(e.reason)
+                })
+                self.wfile.write(error_response.encode('utf-8'))
+            
+        except json.JSONDecodeError as e:
+            error_response = json.dumps({
+                "error": "Invalid JSON in request body",
+                "details": str(e),
+                "received": post_data.decode('utf-8', errors='replace')[:200]
+            })
+            self.send_response(400)
             self.send_header("Content-Type", "application/json")
             self._send_cors_headers()
             self.end_headers()
-            self.wfile.write(json.dumps(result).encode('utf-8'))
+            self.wfile.write(error_response.encode('utf-8'))
             
         except Exception as e:
+            print(f"Unexpected error: {traceback.format_exc()}")
             error_response = json.dumps({
                 "error": str(e),
-                "details": "Failed to proxy request to Soft1"
+                "type": type(e).__name__,
+                "details": traceback.format_exc()
             })
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
