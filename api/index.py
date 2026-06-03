@@ -6,11 +6,11 @@ Soft1 ERP MCP Server + REST Proxy
 
 import json
 import urllib.request
-from http.server import BaseHTTPRequestHandler
 from typing import Optional
 
 import httpx
 from fastmcp import FastMCP
+from flask import Flask, request as flask_request, jsonify
 
 SOFT1_URL = "https://pm.oncloud.gr/s1services/"
 
@@ -238,72 +238,55 @@ async def soft1_fetch_report_page(client_id: str, req_id: str, page_num: int) ->
 
 
 # ============================================================================
-# Vercel HTTP Handler — REST proxy for browser artifacts
-# Vercel detects this class automatically and uses it for all HTTP requestss
+# Flask REST Proxy — used by browser artifacts directly
 # ============================================================================
 
-class handler(BaseHTTPRequestHandler):
+app = Flask(__name__)
 
-    def _send_cors_headers(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self._send_cors_headers()
-        self.end_headers()
+@app.after_request
+def add_cors(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
 
-    def do_GET(self):
-        body = b'{"status": "Soft1 proxy running OK"}'
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self._send_cors_headers()
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length)
-        try:
-            payload = json.loads(body)
-            req = urllib.request.Request(
-                SOFT1_URL,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                raw = resp.read()
-                try:
-                    result = json.loads(raw.decode("utf-8"))
-                except Exception:
-                    result = json.loads(raw.decode("latin-1"))
+@app.route("/", methods=["GET"])
+def health():
+    return jsonify({"status": "Soft1 proxy running OK"})
 
-            response_body = json.dumps(result).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self._send_cors_headers()
-            self.send_header("Content-Length", str(len(response_body)))
-            self.end_headers()
-            self.wfile.write(response_body)
 
-        except Exception as e:
-            error = json.dumps({"error": str(e)}).encode("utf-8")
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self._send_cors_headers()
-            self.send_header("Content-Length", str(len(error)))
-            self.end_headers()
-            self.wfile.write(error)
+@app.route("/", methods=["OPTIONS"])
+def options():
+    return jsonify({}), 200
 
-    def log_message(self, format, *args):
-        pass  # Suppress logs
+
+@app.route("/", methods=["POST"])
+def proxy():
+    try:
+        payload = flask_request.get_json(force=True)
+        if payload is None:
+            return jsonify({"error": "Invalid or missing JSON body"}), 400
+        req = urllib.request.Request(
+            SOFT1_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+            try:
+                result = json.loads(raw.decode("utf-8"))
+            except Exception:
+                result = json.loads(raw.decode("latin-1"))
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================================================
-# MCP entrypoint (when run directly, not via Vercel)
+# Entrypoint
 # ============================================================================
 
 if __name__ == "__main__":
