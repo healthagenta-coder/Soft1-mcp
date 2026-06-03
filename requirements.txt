@@ -1,3 +1,4 @@
+flask
 fastmcp
 httpx
-starlette
+uvicorn
