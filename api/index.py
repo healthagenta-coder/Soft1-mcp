@@ -241,8 +241,13 @@ async def soft1_fetch_report_page(client_id: str, req_id: str, page_num: int) ->
 # Flask REST Proxy — used by browser artifacts directly
 # ============================================================================
 
+from flask import Flask, jsonify
+
 app = Flask(__name__)
 
+@app.route("/", methods=["GET", "POST", "OPTIONS"])
+def handler():
+    return jsonify({"status": "ok"})
 
 @app.after_request
 def add_cors(response):
