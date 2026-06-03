@@ -8,7 +8,10 @@ import json
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 from typing import Optional
+import asyncio
 
+# Note: httpx and fastmcp are for MCP functionality
+# For the Vercel handler, we'll use urllib for simplicity
 import httpx
 from fastmcp import FastMCP
 
@@ -19,7 +22,6 @@ SOFT1_URL = "https://pm.oncloud.gr/s1services/"
 # ============================================================================
 
 mcp = FastMCP("Soft1 ERP Server")
-
 
 # ============================================================================
 # Soft1 API Client (used by MCP tools)
@@ -118,6 +120,24 @@ class Soft1Client:
 
 
 soft1 = Soft1Client()
+
+# Helper to run async functions synchronously
+def run_async(coro):
+    """Run async coroutine in synchronous context"""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    
+    if loop and loop.is_running():
+        # Already in async context, create task
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(asyncio.run, coro)
+            return future.result()
+    else:
+        # No running loop, run normally
+        return asyncio.run(coro)
 
 
 # ============================================================================
@@ -239,45 +259,45 @@ async def soft1_fetch_report_page(client_id: str, req_id: str, page_num: int) ->
 
 # ============================================================================
 # Vercel HTTP Handler — REST proxy for browser artifacts
-# Vercel detects this class automatically and uses it for all HTTP requestss
+# Vercel requires a class named 'handler' that extends BaseHTTPRequestHandler
 # ============================================================================
 
-def handler(request, context):
-    """Vercel serverless function entry point"""
+class handler(BaseHTTPRequestHandler):
+    """Vercel serverless function handler"""
     
-    # Handle CORS preflight
-    if request.method == "OPTIONS":
-        return {
-            "statusCode": 200,
-            "headers": {
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            },
-            "body": ""
-        }
+    def _send_cors_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
     
-    # Handle GET request
-    if request.method == "GET":
-        return {
-            "statusCode": 200,
-            "headers": {
-                "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*",
-            },
-            "body": json.dumps({"status": "Soft1 MCP Proxy is running", "method": "GET"})
-        }
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self._send_cors_headers()
+        self.end_headers()
     
-    # Handle POST request
-    if request.method == "POST":
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self._send_cors_headers()
+        self.end_headers()
+        
+        response = json.dumps({
+            "status": "Soft1 MCP Proxy is running",
+            "method": "GET",
+            "endpoints": ["POST / - Proxy Soft1 API calls"]
+        })
+        self.wfile.write(response.encode('utf-8'))
+    
+    def do_POST(self):
         try:
-            # Parse request body
-            body = json.loads(request.body or "{}")
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            payload = json.loads(post_data.decode('utf-8'))
             
             # Forward to Soft1 API
             req = urllib.request.Request(
                 SOFT1_URL,
-                data=json.dumps(body).encode("utf-8"),
+                data=json.dumps(payload).encode('utf-8'),
                 headers={"Content-Type": "application/json"},
                 method="POST"
             )
@@ -285,33 +305,26 @@ def handler(request, context):
             with urllib.request.urlopen(req, timeout=30) as resp:
                 raw = resp.read()
                 try:
-                    result = json.loads(raw.decode("utf-8"))
+                    result = json.loads(raw.decode('utf-8'))
                 except:
-                    result = json.loads(raw.decode("latin-1"))
+                    result = json.loads(raw.decode('latin-1'))
             
-            return {
-                "statusCode": 200,
-                "headers": {
-                    "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*",
-                },
-                "body": json.dumps(result)
-            }
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self._send_cors_headers()
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode('utf-8'))
             
         except Exception as e:
-            return {
-                "statusCode": 500,
-                "headers": {
-                    "Content-Type": "application/json",
-                    "Access-Control-Allow-Origin": "*",
-                },
-                "body": json.dumps({"error": str(e), "details": "Failed to proxy request"})
-            }
-    
-    return {
-        "statusCode": 405,
-        "body": json.dumps({"error": "Method not allowed"})
-    }
+            error_response = json.dumps({
+                "error": str(e),
+                "details": "Failed to proxy request to Soft1"
+            })
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self._send_cors_headers()
+            self.end_headers()
+            self.wfile.write(error_response.encode('utf-8'))
 
 
 # ============================================================================
