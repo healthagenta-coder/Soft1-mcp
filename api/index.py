@@ -1,7 +1,5 @@
 """
 Soft1 ERP MCP Server + REST Proxy
-- MCP tools: used by Claude
-- REST proxy: used by browser artifacts directly
 """
 
 import json
@@ -11,7 +9,6 @@ import gzip
 import zlib
 from http.server import BaseHTTPRequestHandler
 from typing import Optional
-import asyncio
 import traceback
 import io
 
@@ -128,51 +125,37 @@ soft1 = Soft1Client()
 def decompress_response(data: bytes) -> str:
     """Decompress gzip or deflate compressed response"""
     try:
-        # Try gzip decompression first
         if len(data) >= 2 and data[0] == 0x1f and data[1] == 0x8b:
-            # Gzip magic bytes
             with gzip.GzipFile(fileobj=io.BytesIO(data)) as gz:
                 decompressed = gz.read()
                 return decompressed.decode('utf-8', errors='replace')
         else:
-            # Try zlib/deflate
             try:
                 decompressed = zlib.decompress(data, -zlib.MAX_WBITS)
                 return decompressed.decode('utf-8', errors='replace')
             except:
-                # Try with wbits 15 (default)
                 try:
                     decompressed = zlib.decompress(data)
                     return decompressed.decode('utf-8', errors='replace')
                 except:
-                    # Not compressed, return as is
                     return data.decode('utf-8', errors='replace')
     except Exception as e:
         print(f"Decompression error: {e}")
-        # Return original as string if decompression fails
         return data.decode('utf-8', errors='replace')
 
 
 def parse_soft1_response(raw_data: bytes, content_type: str) -> dict:
     """Parse Soft1 response handling compression and encoding"""
-    
-    # First, decompress if needed
     decompressed_str = decompress_response(raw_data)
     print(f"Decompressed response preview: {decompressed_str[:200]}")
     
-    # Try to parse as JSON
     try:
-        # Check if it's already JSON
         return json.loads(decompressed_str)
     except json.JSONDecodeError:
         pass
     
-    # Try with latin-1/greek encoding (windows-1253)
     try:
-        # Sometimes the raw compressed data needs special handling
-        # Try to decompress with different approach for windows-1253
         if len(raw_data) >= 2 and raw_data[0] == 0x1f and raw_data[1] == 0x8b:
-            # Re-decompress with gzip and decode as windows-1253
             with gzip.GzipFile(fileobj=io.BytesIO(raw_data)) as gz:
                 decompressed = gz.read()
                 decoded = decompressed.decode('windows-1253')
@@ -180,28 +163,24 @@ def parse_soft1_response(raw_data: bytes, content_type: str) -> dict:
     except:
         pass
     
-    # If all JSON parsing fails, return as text with metadata
     return {
         "success": True,
         "raw_response": decompressed_str[:1000],
         "content_type": content_type,
-        "note": "Response received but not valid JSON. This might be HTML or other format."
+        "note": "Response received but not valid JSON"
     }
 
 
 # ============================================================================
-# MCP Tools (used by Claude)
+# MCP Tools
 # ============================================================================
 
 @mcp.tool()
 async def soft1_login(username: str, password: str) -> dict:
-    """Login to Soft1 ERP and get session token"""
     return await soft1.login(username, password)
-
 
 @mcp.tool()
 async def soft1_search_customers(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
-    """Search for customers by name, code, VAT, city, or phone"""
     filter_map = {
         "name": "CUSTOMER.NAME={0}*",
         "code": "CUSTOMER.CODE={0}*",
@@ -212,17 +191,13 @@ async def soft1_search_customers(client_id: str, filter_type: str, filter_value:
     filter_str = filter_map[filter_type].format(filter_value)
     return await soft1.get_browser_info(client_id, "CUSTOMER", "Customers", filter_str, limit)
 
-
 @mcp.tool()
 async def soft1_get_customer_profile(client_id: str, customer_key: int) -> dict:
-    """Get complete customer profile with all details"""
     locate_info = "CUSTOMER:CODE,NAME,AFM,ADDRESS,CITY,ZIP,PHONE01,PHONE02,FAX,EMAIL,WEBPAGE,DISCOUNT,REMARKS"
     return await soft1.get_data(client_id, "CUSTOMER", customer_key, locate_info)
 
-
 @mcp.tool()
 async def soft1_customer_balance(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
-    """Get customer balance and turnover information"""
     filter_map = {
         "name": "CUSTOMER.NAME={0}*",
         "code": "CUSTOMER.CODE={0}*",
@@ -231,10 +206,8 @@ async def soft1_customer_balance(client_id: str, filter_type: str, filter_value:
     filter_str = filter_map[filter_type].format(filter_value)
     return await soft1.get_browser_info(client_id, "CUSTOMER", "Customer Balance - Turnover", filter_str, limit)
 
-
 @mcp.tool()
 async def soft1_search_items(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
-    """Search for items/products by name, code, or category"""
     filter_map = {
         "name": "ITEM.NAME={0}*",
         "code": "ITEM.CODE={0}*",
@@ -243,10 +216,8 @@ async def soft1_search_items(client_id: str, filter_type: str, filter_value: str
     filter_str = filter_map[filter_type].format(filter_value)
     return await soft1.get_browser_info(client_id, "ITEM", "Items", filter_str, limit)
 
-
 @mcp.tool()
 async def soft1_item_stock_balance(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
-    """Check stock levels and availability"""
     filter_map = {
         "name": "ITEM.NAME={0}*",
         "code": "ITEM.CODE={0}*",
@@ -255,10 +226,8 @@ async def soft1_item_stock_balance(client_id: str, filter_type: str, filter_valu
     filter_str = filter_map[filter_type].format(filter_value)
     return await soft1.get_browser_info(client_id, "ITEM", "Item balance", filter_str, limit)
 
-
 @mcp.tool()
 async def soft1_search_sales_documents(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
-    """Search sales documents (invoices, orders, offers, credit notes)"""
     filter_map = {
         "customer_name": "SALDOC.TRDRNAME={0}*",
         "customer_code": "SALDOC.CCCCODE={0}*",
@@ -268,10 +237,8 @@ async def soft1_search_sales_documents(client_id: str, filter_type: str, filter_
     filter_str = filter_map[filter_type].format(filter_value)
     return await soft1.get_browser_info(client_id, "SALDOC", "Sales List", filter_str, limit)
 
-
 @mcp.tool()
 async def soft1_outstanding_orders(client_id: str, filter_type: str = "all", filter_value: str = "") -> dict:
-    """Get outstanding/uninvoiced sales orders"""
     filter_str = ""
     if filter_type != "all":
         filter_map = {
@@ -281,10 +248,8 @@ async def soft1_outstanding_orders(client_id: str, filter_type: str = "all", fil
         filter_str = filter_map[filter_type].format(filter_value)
     return await soft1.get_browser_info(client_id, "SALDOC", "Outstanding documents - Sales", filter_str)
 
-
 @mcp.tool()
 async def soft1_generate_report(client_id: str, report_type: str, filter_type: str = "all", filter_value: str = "") -> dict:
-    """Generate a report (aged_balance or customer_address_book)"""
     report_map = {
         "aged_balance": "Cust_OPITEM",
         "customer_address_book": "CUST_ADDR_BOOK"
@@ -299,19 +264,16 @@ async def soft1_generate_report(client_id: str, report_type: str, filter_type: s
         filter_str = filter_map[filter_type].format(filter_value)
     return await soft1.get_report_info(client_id, report_obj, filter_str)
 
-
 @mcp.tool()
 async def soft1_fetch_report_page(client_id: str, req_id: str, page_num: int) -> dict:
-    """Fetch a specific page of a generated report (returns HTML)"""
     return await soft1.get_report_data(client_id, req_id, page_num)
 
 
 # ============================================================================
-# Vercel HTTP Handler — REST proxy for browser artifacts
+# Vercel HTTP Handler
 # ============================================================================
 
 class handler(BaseHTTPRequestHandler):
-    """Vercel serverless function handler"""
     
     def _send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -328,13 +290,7 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self._send_cors_headers()
         self.end_headers()
-        
-        response = json.dumps({
-            "status": "Soft1 MCP Proxy is running",
-            "method": "GET",
-            "endpoints": ["POST / - Proxy Soft1 API calls"],
-            "soft1_url": SOFT1_URL
-        })
+        response = json.dumps({"status": "Soft1 MCP Proxy running", "soft1_url": SOFT1_URL})
         self.wfile.write(response.encode('utf-8'))
     
     def do_POST(self):
@@ -346,7 +302,13 @@ class handler(BaseHTTPRequestHandler):
                 raise ValueError("Empty request body")
             
             payload = json.loads(post_data.decode('utf-8'))
-            print(f"Service called: {payload.get('service', 'unknown')}")
+            
+            # 🔥 CRITICAL FIX: Add appId if missing (except for login)
+            if payload.get('service') != 'login' and 'appId' not in payload:
+                payload['appId'] = '1001'
+                print(f"Added appId=1001 to {payload.get('service')} request")
+            
+            print(f"Forwarding: service={payload.get('service')}, appId={payload.get('appId')}")
             
             # Forward to Soft1 API
             req_data = json.dumps(payload).encode('utf-8')
@@ -356,7 +318,7 @@ class handler(BaseHTTPRequestHandler):
                 headers={
                     "Content-Type": "application/json",
                     "Accept": "application/json, text/plain, */*",
-                    "Accept-Encoding": "gzip, deflate"  # Tell Soft1 we accept compressed responses
+                    "Accept-Encoding": "gzip, deflate"
                 },
                 method="POST"
             )
@@ -364,23 +326,7 @@ class handler(BaseHTTPRequestHandler):
             with urllib.request.urlopen(req, timeout=30) as resp:
                 raw_data = resp.read()
                 content_type = resp.headers.get('Content-Type', '')
-                content_encoding = resp.headers.get('Content-Encoding', '')
-                
-                print(f"Response Content-Type: {content_type}")
-                print(f"Response Content-Encoding: {content_encoding}")
-                print(f"Response size: {len(raw_data)} bytes")
-                
-                # Parse the response with compression handling
                 result = parse_soft1_response(raw_data, content_type)
-                
-                # If result contains raw_response and no valid JSON, try one more time
-                if "raw_response" in result and "success" in result:
-                    # Check if the raw_response looks like JSON
-                    try:
-                        maybe_json = json.loads(result["raw_response"])
-                        result = maybe_json
-                    except:
-                        pass
                 
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -389,10 +335,7 @@ class handler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps(result).encode('utf-8'))
             
         except json.JSONDecodeError as e:
-            error_response = json.dumps({
-                "error": "Invalid JSON in request body",
-                "details": str(e)
-            })
+            error_response = json.dumps({"error": "Invalid JSON", "details": str(e)})
             self.send_response(400)
             self.send_header("Content-Type", "application/json")
             self._send_cors_headers()
@@ -401,21 +344,13 @@ class handler(BaseHTTPRequestHandler):
             
         except Exception as e:
             print(f"Error: {traceback.format_exc()}")
-            error_response = json.dumps({
-                "error": str(e),
-                "type": type(e).__name__,
-                "details": traceback.format_exc()
-            })
+            error_response = json.dumps({"error": str(e), "type": type(e).__name__})
             self.send_response(500)
             self.send_header("Content-Type", "application/json")
             self._send_cors_headers()
             self.end_headers()
             self.wfile.write(error_response.encode('utf-8'))
 
-
-# ============================================================================
-# MCP entrypoint (when run directly, not via Vercel)
-# ============================================================================
 
 if __name__ == "__main__":
     mcp.run()
