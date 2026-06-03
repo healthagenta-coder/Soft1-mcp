@@ -1,35 +1,34 @@
 """
-Soft1 ERP MCP Server + REST Proxy
-- MCP tools: used by Claude
-- REST proxy: used by browser artifacts directly
+Soft1 ERP MCP Server - REAL MCP Implementation
+Uses FastMCP for proper MCP protocol support
 """
 
+import httpx
 import json
-import urllib.request
+from fastmcp import FastMCP
 from typing import Optional
 
-import httpx
-from fastmcp import FastMCP
-from flask import Flask, request as flask_request, jsonify
-
-SOFT1_URL = "https://pm.oncloud.gr/s1services/"
-
 # ============================================================================
-# Initialize MCP Server
+# Initialize MCP Server (FastMCP handles the protocol)
 # ============================================================================
 
 mcp = FastMCP("Soft1 ERP Server")
 
 
 # ============================================================================
-# Soft1 API Client (used by MCP tools)
+# Soft1 API Client
 # ============================================================================
 
 class Soft1Client:
+    """Client for Soft1 ERP API"""
+
+    BASE_URL = "https://pm.oncloud.gr/s1services/"
+
     def __init__(self):
         self.client_id: Optional[str] = None
 
     async def login(self, username: str, password: str) -> dict:
+        """Login to Soft1"""
         async with httpx.AsyncClient(timeout=30) as client:
             payload = {
                 "service": "login",
@@ -41,16 +40,29 @@ class Soft1Client:
                 "MODULE": "0",
                 "REFID": "1"
             }
-            response = await client.post(SOFT1_URL, json=payload)
+            response = await client.post(self.BASE_URL, json=payload)
+
+            # Handle different encodings (Soft1 may return Latin-1 instead of UTF-8)
             try:
                 data = response.json()
             except UnicodeDecodeError:
-                data = json.loads(response.content.decode('latin-1'))
+                # Try Latin-1 encoding
+                text = response.content.decode('latin-1')
+                data = json.loads(text)
+
             if data.get("success"):
                 self.client_id = data.get("clientID")
             return data
 
-    async def get_browser_info(self, client_id, obj, list_name, filters="", limit=20):
+    async def get_browser_info(
+        self,
+        client_id: str,
+        obj: str,
+        list_name: str,
+        filters: str = "",
+        limit: int = 20
+    ) -> dict:
+        """Get list of records"""
         async with httpx.AsyncClient(timeout=30) as client:
             payload = {
                 "service": "getBrowserInfo",
@@ -62,13 +74,22 @@ class Soft1Client:
                 "LIMIT": limit,
                 "FILTERS": filters
             }
-            response = await client.post(SOFT1_URL, json=payload)
+            response = await client.post(self.BASE_URL, json=payload)
+
             try:
                 return response.json()
             except UnicodeDecodeError:
-                return json.loads(response.content.decode('latin-1'))
+                text = response.content.decode('latin-1')
+                return json.loads(text)
 
-    async def get_data(self, client_id, obj, key, locate_info=""):
+    async def get_data(
+        self,
+        client_id: str,
+        obj: str,
+        key: int,
+        locate_info: str = ""
+    ) -> dict:
+        """Get detailed record"""
         async with httpx.AsyncClient(timeout=30) as client:
             payload = {
                 "service": "getData",
@@ -79,13 +100,21 @@ class Soft1Client:
                 "KEY": key,
                 "LOCATEINFO": locate_info
             }
-            response = await client.post(SOFT1_URL, json=payload)
+            response = await client.post(self.BASE_URL, json=payload)
+
             try:
                 return response.json()
             except UnicodeDecodeError:
-                return json.loads(response.content.decode('latin-1'))
+                text = response.content.decode('latin-1')
+                return json.loads(text)
 
-    async def get_report_info(self, client_id, obj, filters=""):
+    async def get_report_info(
+        self,
+        client_id: str,
+        obj: str,
+        filters: str = ""
+    ) -> dict:
+        """Generate report"""
         async with httpx.AsyncClient(timeout=30) as client:
             payload = {
                 "service": "getReportInfo",
@@ -95,13 +124,21 @@ class Soft1Client:
                 "LIST": "",
                 "FILTERS": filters
             }
-            response = await client.post(SOFT1_URL, json=payload)
+            response = await client.post(self.BASE_URL, json=payload)
+
             try:
                 return response.json()
             except UnicodeDecodeError:
-                return json.loads(response.content.decode('latin-1'))
+                text = response.content.decode('latin-1')
+                return json.loads(text)
 
-    async def get_report_data(self, client_id, req_id, page_num):
+    async def get_report_data(
+        self,
+        client_id: str,
+        req_id: str,
+        page_num: int
+    ) -> dict:
+        """Fetch report page"""
         async with httpx.AsyncClient(timeout=30) as client:
             payload = {
                 "service": "getReportData",
@@ -110,29 +147,45 @@ class Soft1Client:
                 "reqID": req_id,
                 "PAGENUM": page_num
             }
-            response = await client.post(SOFT1_URL, json=payload)
+            response = await client.post(self.BASE_URL, json=payload)
+
             try:
                 return response.json()
             except UnicodeDecodeError:
-                return json.loads(response.content.decode('latin-1'))
+                text = response.content.decode('latin-1')
+                return json.loads(text)
 
 
 soft1 = Soft1Client()
 
 
 # ============================================================================
-# MCP Tools (used by Claude)
+# MCP Tools (FastMCP handles protocol automatically)
 # ============================================================================
 
 @mcp.tool()
 async def soft1_login(username: str, password: str) -> dict:
     """Login to Soft1 ERP and get session token"""
-    return await soft1.login(username, password)
+    result = await soft1.login(username, password)
+    return result
 
 
 @mcp.tool()
-async def soft1_search_customers(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
-    """Search for customers by name, code, VAT, city, or phone"""
+async def soft1_search_customers(
+    client_id: str,
+    filter_type: str,
+    filter_value: str,
+    limit: int = 20
+) -> dict:
+    """
+    Search for customers by name, code, VAT, city, or phone
+
+    Args:
+        client_id: Session clientID from login
+        filter_type: 'name', 'code', 'vat', 'city', or 'phone'
+        filter_value: Value to search (supports * for partial)
+        limit: Max results (default 20)
+    """
     filter_map = {
         "name": "CUSTOMER.NAME={0}*",
         "code": "CUSTOMER.CODE={0}*",
@@ -141,18 +194,32 @@ async def soft1_search_customers(client_id: str, filter_type: str, filter_value:
         "phone": "CUSTOMER.PHONE01={0}*"
     }
     filter_str = filter_map[filter_type].format(filter_value)
-    return await soft1.get_browser_info(client_id, "CUSTOMER", "Customers", filter_str, limit)
+    result = await soft1.get_browser_info(
+        client_id, "CUSTOMER", "Customers", filter_str, limit
+    )
+    return result
 
 
 @mcp.tool()
-async def soft1_get_customer_profile(client_id: str, customer_key: int) -> dict:
+async def soft1_get_customer_profile(
+    client_id: str,
+    customer_key: int
+) -> dict:
     """Get complete customer profile with all details"""
     locate_info = "CUSTOMER:CODE,NAME,AFM,ADDRESS,CITY,ZIP,PHONE01,PHONE02,FAX,EMAIL,WEBPAGE,DISCOUNT,REMARKS"
-    return await soft1.get_data(client_id, "CUSTOMER", customer_key, locate_info)
+    result = await soft1.get_data(
+        client_id, "CUSTOMER", customer_key, locate_info
+    )
+    return result
 
 
 @mcp.tool()
-async def soft1_customer_balance(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
+async def soft1_customer_balance(
+    client_id: str,
+    filter_type: str,
+    filter_value: str,
+    limit: int = 20
+) -> dict:
     """Get customer balance and turnover information"""
     filter_map = {
         "name": "CUSTOMER.NAME={0}*",
@@ -160,11 +227,20 @@ async def soft1_customer_balance(client_id: str, filter_type: str, filter_value:
         "vat": "CUSTOMER.AFM={0}"
     }
     filter_str = filter_map[filter_type].format(filter_value)
-    return await soft1.get_browser_info(client_id, "CUSTOMER", "Customer Balance - Turnover", filter_str, limit)
+    result = await soft1.get_browser_info(
+        client_id, "CUSTOMER", "Customer Balance - Turnover",
+        filter_str, limit
+    )
+    return result
 
 
 @mcp.tool()
-async def soft1_search_items(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
+async def soft1_search_items(
+    client_id: str,
+    filter_type: str,
+    filter_value: str,
+    limit: int = 20
+) -> dict:
     """Search for items/products by name, code, or category"""
     filter_map = {
         "name": "ITEM.NAME={0}*",
@@ -172,11 +248,19 @@ async def soft1_search_items(client_id: str, filter_type: str, filter_value: str
         "category": "ITEM.CATEGORY={0}*"
     }
     filter_str = filter_map[filter_type].format(filter_value)
-    return await soft1.get_browser_info(client_id, "ITEM", "Items", filter_str, limit)
+    result = await soft1.get_browser_info(
+        client_id, "ITEM", "Items", filter_str, limit
+    )
+    return result
 
 
 @mcp.tool()
-async def soft1_item_stock_balance(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
+async def soft1_item_stock_balance(
+    client_id: str,
+    filter_type: str,
+    filter_value: str,
+    limit: int = 20
+) -> dict:
     """Check stock levels and availability"""
     filter_map = {
         "name": "ITEM.NAME={0}*",
@@ -184,11 +268,19 @@ async def soft1_item_stock_balance(client_id: str, filter_type: str, filter_valu
         "category": "ITEM.CATEGORY={0}*"
     }
     filter_str = filter_map[filter_type].format(filter_value)
-    return await soft1.get_browser_info(client_id, "ITEM", "Item balance", filter_str, limit)
+    result = await soft1.get_browser_info(
+        client_id, "ITEM", "Item balance", filter_str, limit
+    )
+    return result
 
 
 @mcp.tool()
-async def soft1_search_sales_documents(client_id: str, filter_type: str, filter_value: str, limit: int = 20) -> dict:
+async def soft1_search_sales_documents(
+    client_id: str,
+    filter_type: str,
+    filter_value: str,
+    limit: int = 20
+) -> dict:
     """Search sales documents (invoices, orders, offers, credit notes)"""
     filter_map = {
         "customer_name": "SALDOC.TRDRNAME={0}*",
@@ -197,11 +289,18 @@ async def soft1_search_sales_documents(client_id: str, filter_type: str, filter_
         "type": "SALDOC.SERIES={0}*"
     }
     filter_str = filter_map[filter_type].format(filter_value)
-    return await soft1.get_browser_info(client_id, "SALDOC", "Sales List", filter_str, limit)
+    result = await soft1.get_browser_info(
+        client_id, "SALDOC", "Sales List", filter_str, limit
+    )
+    return result
 
 
 @mcp.tool()
-async def soft1_outstanding_orders(client_id: str, filter_type: str = "all", filter_value: str = "") -> dict:
+async def soft1_outstanding_orders(
+    client_id: str,
+    filter_type: str = "all",
+    filter_value: str = ""
+) -> dict:
     """Get outstanding/uninvoiced sales orders"""
     filter_str = ""
     if filter_type != "all":
@@ -210,12 +309,23 @@ async def soft1_outstanding_orders(client_id: str, filter_type: str = "all", fil
             "customer_code": "SALDOC.CCCCODE={0}*"
         }
         filter_str = filter_map[filter_type].format(filter_value)
-    return await soft1.get_browser_info(client_id, "SALDOC", "Outstanding documents - Sales", filter_str)
+    result = await soft1.get_browser_info(
+        client_id, "SALDOC", "Outstanding documents - Sales", filter_str
+    )
+    return result
 
 
 @mcp.tool()
-async def soft1_generate_report(client_id: str, report_type: str, filter_type: str = "all", filter_value: str = "") -> dict:
-    """Generate a report (aged_balance or customer_address_book)"""
+async def soft1_generate_report(
+    client_id: str,
+    report_type: str,
+    filter_type: str = "all",
+    filter_value: str = ""
+) -> dict:
+    """
+    Generate a report (aged_balance or customer_address_book)
+    Returns reqID and number of pages
+    """
     report_map = {
         "aged_balance": "Cust_OPITEM",
         "customer_address_book": "CUST_ADDR_BOOK"
@@ -228,71 +338,25 @@ async def soft1_generate_report(client_id: str, report_type: str, filter_type: s
             "customer_vat": "CUSTOMER.AFM={0}"
         }
         filter_str = filter_map[filter_type].format(filter_value)
-    return await soft1.get_report_info(client_id, report_obj, filter_str)
+    result = await soft1.get_report_info(client_id, report_obj, filter_str)
+    return result
 
 
 @mcp.tool()
-async def soft1_fetch_report_page(client_id: str, req_id: str, page_num: int) -> dict:
+async def soft1_fetch_report_page(
+    client_id: str,
+    req_id: str,
+    page_num: int
+) -> dict:
     """Fetch a specific page of a generated report (returns HTML)"""
-    return await soft1.get_report_data(client_id, req_id, page_num)
+    result = await soft1.get_report_data(client_id, req_id, page_num)
+    return result
 
 
 # ============================================================================
-# Flask REST Proxy — used by browser artifacts directly
-# ============================================================================
-
-from flask import Flask, jsonify
-
-app = Flask(__name__)
-
-@app.route("/", methods=["GET", "POST", "OPTIONS"])
-def handler():
-    return jsonify({"status": "ok"})
-
-@app.after_request
-def add_cors(response):
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
-    return response
-
-
-@app.route("/", methods=["GET"])
-def health():
-    return jsonify({"status": "Soft1 proxy running OK"})
-
-
-@app.route("/", methods=["OPTIONS"])
-def options():
-    return jsonify({}), 200
-
-
-@app.route("/", methods=["POST"])
-def proxy():
-    try:
-        payload = flask_request.get_json(force=True)
-        if payload is None:
-            return jsonify({"error": "Invalid or missing JSON body"}), 400
-        req = urllib.request.Request(
-            SOFT1_URL,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            raw = resp.read()
-            try:
-                result = json.loads(raw.decode("utf-8"))
-            except Exception:
-                result = json.loads(raw.decode("latin-1"))
-        return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# ============================================================================
-# Entrypoint
+# Run the MCP Server
 # ============================================================================
 
 if __name__ == "__main__":
+    # FastMCP automatically handles stdio protocol
     mcp.run()
